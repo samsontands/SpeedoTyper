@@ -13,3 +13,9 @@ SS/
 # Local model cache (too large for git)
 *.gguf
 Models/
+
+# Swift build artifacts
+SpeedoTyperMac/.build/
+SpeedoTyperMac/.swiftpm/
+SpeedoTyperMac/Package.resolved
+*.xcodeproj/
