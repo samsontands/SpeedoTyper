@@ -33,8 +33,13 @@ def _check_accessibility() -> bool:
         return True
 
 
-def _check_model_downloaded() -> bool:
-    return find_model_path() is not None
+def _check_model_downloaded(model_id: str | None = None) -> bool:
+    model_path = find_model_path()
+    if model_path is None:
+        return False
+    if not model_id:
+        return True
+    return model_path.name == model_id
 
 
 class App:
