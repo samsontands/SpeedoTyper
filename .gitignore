@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Cotypist screenshots — reference only, not for public repo
+SS/
+
+# Local model cache (too large for git)
+*.gguf
+Models/

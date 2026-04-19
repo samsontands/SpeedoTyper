@@ -1,0 +1,10 @@
+pynput>=1.7.6
+pyobjc-core>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"
+
+# On-device LLM — same runtime Cotypist uses (llama.cpp).
+# Install with Metal acceleration on Apple Silicon:
+#   CMAKE_ARGS="-DGGML_METAL=on" pip install --upgrade --force-reinstall --no-cache-dir llama-cpp-python
+llama-cpp-python>=0.3.0
