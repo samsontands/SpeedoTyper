@@ -3,9 +3,7 @@ import CoreGraphics
 
 @MainActor
 final class KeyboardEngine {
-    // Key codes
-    private static let kTab: Int64 = 0x30
-    private static let kBacktick: Int64 = 0x32
+    // Fixed system keys
     private static let kEscape: Int64 = 0x35
     private static let kReturn: Int64 = 0x24
     private static let kDelete: Int64 = 0x33
@@ -13,7 +11,11 @@ final class KeyboardEngine {
 
     private let predictor: CompositePredictor
     private let overlay: OverlayController
+    private let store: ConfigStore
     private var tap: EventTap?
+
+    private var acceptFullCode: Int64 { KeyCodes.code(for: store.config.acceptFullKey) ?? 0x30 }
+    private var acceptWordCode: Int64 { KeyCodes.code(for: store.config.acceptWordKey) ?? 0x32 }
 
     // Word + rolling context tracking
     private var currentWord: String = ""
@@ -23,9 +25,14 @@ final class KeyboardEngine {
     private var currentSuggestion: String = ""
     private var debounceTimer: Timer?
 
-    init(predictor: CompositePredictor, overlay: OverlayController) {
+    // Emoji shortcode state: triggered by `:`, characters appended, second `:` commits.
+    private var emojiBuffer: String = ""
+    private var inEmojiMode: Bool = false
+
+    init(predictor: CompositePredictor, overlay: OverlayController, store: ConfigStore) {
         self.predictor = predictor
         self.overlay = overlay
+        self.store = store
     }
 
     func start() {
@@ -53,19 +60,25 @@ final class KeyboardEngine {
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
+        // Emoji acceptance (accept-full key with emoji preview visible)
+        if keyCode == acceptFullCode, inEmojiMode {
+            commitEmoji()
+            return nil
+        }
         // Accept full suggestion
-        if keyCode == Self.kTab, !currentSuggestion.isEmpty {
+        if keyCode == acceptFullCode, !currentSuggestion.isEmpty {
             acceptFull()
-            return nil  // swallow the Tab
+            return nil
         }
         // Accept next word only
-        if keyCode == Self.kBacktick, !currentSuggestion.isEmpty {
+        if keyCode == acceptWordCode, !currentSuggestion.isEmpty {
             acceptWord()
             return nil
         }
         // Dismiss
         if keyCode == Self.kEscape {
             dismiss()
+            exitEmojiMode()
             return Unmanaged.passUnretained(event)
         }
 
@@ -76,6 +89,11 @@ final class KeyboardEngine {
         let s = String(utf16CodeUnits: chars, count: length)
 
         if keyCode == Self.kDelete {
+            if inEmojiMode {
+                if !emojiBuffer.isEmpty { emojiBuffer.removeLast() } else { exitEmojiMode() }
+                refreshEmoji()
+                return Unmanaged.passUnretained(event)
+            }
             if !currentWord.isEmpty { currentWord.removeLast() } else if !contextWords.isEmpty {
                 // crude: pop last context word
                 contextWords.removeLast()
@@ -97,6 +115,30 @@ final class KeyboardEngine {
             return Unmanaged.passUnretained(event)
         }
 
+        // Emoji trigger
+        if s == ":" {
+            if inEmojiMode {
+                // second `:` — commit the best match
+                commitEmoji()
+                return nil  // swallow the second colon
+            }
+            inEmojiMode = true
+            emojiBuffer = ""
+            dismiss()
+            refreshEmoji()
+            return Unmanaged.passUnretained(event)
+        }
+
+        if inEmojiMode {
+            if !s.isEmpty, s.unicodeScalars.allSatisfy({ $0.properties.isAlphabetic || $0 == "_" }) {
+                emojiBuffer.append(s)
+                refreshEmoji()
+                return Unmanaged.passUnretained(event)
+            } else {
+                exitEmojiMode()
+            }
+        }
+
         // Printable input
         if !s.isEmpty, s.unicodeScalars.allSatisfy({ !$0.properties.isDefaultIgnorableCodePoint }) {
             currentWord.append(s)
@@ -104,6 +146,29 @@ final class KeyboardEngine {
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    // MARK: - Emoji
+
+    private func refreshEmoji() {
+        let matches = EmojiData.match(prefix: emojiBuffer)
+        if matches.isEmpty { dismiss(); return }
+        overlay.showEmoji(typed: ":" + emojiBuffer, matches: matches)
+    }
+
+    private func commitEmoji() {
+        let matches = EmojiData.match(prefix: emojiBuffer)
+        guard let first = matches.first else { exitEmojiMode(); return }
+        // Delete the `:buffer` the user typed, then type the glyph.
+        Injector.backspace(emojiBuffer.count + 1)
+        Injector.type(first.glyph)
+        exitEmojiMode()
+    }
+
+    private func exitEmojiMode() {
+        inEmojiMode = false
+        emojiBuffer = ""
+        dismiss()
     }
 
     // MARK: - Prediction + overlay
@@ -128,7 +193,8 @@ final class KeyboardEngine {
 
     private func acceptFull() {
         let remaining = String(currentSuggestion.dropFirst(currentWord.count))
-        Injector.type(remaining + " ")
+        let trailing = store.config.includeTrailingSpace ? " " : ""
+        Injector.type(remaining + trailing)
         contextWords.append(currentSuggestion)
         trimContext()
         currentWord = ""

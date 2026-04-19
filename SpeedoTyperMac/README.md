@@ -7,7 +7,7 @@ repo root remains as a reference implementation for the prediction logic.
 
 ## Status
 
-This is a working skeleton:
+Working end-to-end:
 
 | Piece                          | Status   |
 |--------------------------------|----------|
@@ -16,14 +16,31 @@ This is a working skeleton:
 | Word + context tracking        | ✅       |
 | Tab / backtick accept          | ✅       |
 | Unicode text injection         | ✅       |
-| N-gram predictor (trigram/bigram/unigram + system dictionary) | ✅ |
+| N-gram predictor               | ✅       |
 | Persisted learning (`ngrams.json`) | ✅   |
 | Accessibility caret tracking   | ✅       |
-| Menu bar status item           | ✅       |
-| LLM (Gemma 4 E2B via llama.cpp) | ⏳ stubbed — next pass |
-| Settings window (9 panels)     | ⏳ next pass |
-| Emoji shortcodes               | ⏳ next pass |
+| Menu bar status item + settings | ✅      |
+| LLM (Gemma 4 E2B via llama.cpp) | ✅ via Homebrew llama.cpp |
+| Settings window (9 panes)      | ✅ SwiftUI NavigationSplitView |
+| Emoji shortcodes (`:fire` + Tab) | ✅     |
+| User-rebindable hotkeys (config) | ✅     |
 | Screen-recording context       | ⏳ next pass |
+
+## Prerequisites
+
+SwiftPM links against llama.cpp + ggml via Homebrew:
+
+```bash
+brew install llama.cpp
+```
+
+A Gemma 4 E2B GGUF is discovered in this order:
+
+1. `$SPEEDOTYPER_MODEL` (absolute path)
+2. `~/Library/Application Support/SpeedoTyper/Models/gemma-4-E2B-i1-Q4_K_M.gguf`
+3. **Cotypist's copy** — reused automatically if Cotypist is installed.
+
+If none is found the app runs n-gram-only — still fast, just less smart.
 
 ## Build & run
 

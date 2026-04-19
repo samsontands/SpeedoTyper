@@ -50,7 +50,12 @@ final class ConfigStore {
     }
 
     func save() {
-        guard let data = try? JSONEncoder().encode(config) else { return }
+        write(config)
+    }
+
+    func write(_ cfg: Config) {
+        self.config = cfg
+        guard let data = try? JSONEncoder().encode(cfg) else { return }
         let tmp = configURL.appendingPathExtension("tmp")
         try? data.write(to: tmp, options: .atomic)
         _ = try? FileManager.default.replaceItemAt(configURL, withItemAt: tmp)
