@@ -43,6 +43,7 @@ final class LLMPredictor: Predictor {
     // MARK: - Model lifecycle
 
     private func loadBackend() {
+        ggml_backend_load_all()
         llama_backend_init()
 
         var mp = llama_model_default_params()
