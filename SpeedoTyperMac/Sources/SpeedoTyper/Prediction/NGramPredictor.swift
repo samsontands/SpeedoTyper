@@ -98,9 +98,11 @@ final class NGramPredictor: Predictor {
         for (w, c) in unigrams where w.hasPrefix(prefix) && w != prefix {
             candidates[w, default: 0] += Double(c) * 30
         }
-        for w in dictionary where w.hasPrefix(prefix) && w != prefix {
-            let base = Double(dictionaryWeight[w] ?? 0)
-            candidates[w, default: 0] += base * 0.1 + 0.2
+
+        if candidates.isEmpty, prefix.count >= 2, prefix.allSatisfy({ $0.isLetter }) {
+            for w in dictionary where w.hasPrefix(prefix) && w != prefix {
+                candidates[w, default: 0] += Double(dictionaryWeight[w, default: 0])
+            }
         }
 
         guard !candidates.isEmpty else { return nil }
@@ -130,12 +132,22 @@ final class NGramPredictor: Predictor {
         guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
             return ([], [:])
         }
-        var words: [String] = []
-        var weights: [String: Int] = [:]
+        var wordSet = Set<String>()
         for raw in contents.split(separator: "\n") {
             let lower = raw.lowercased()
             guard lower.count >= 3,
-                  lower.allSatisfy({ $0.isLetter || $0 == "'" }) else { continue }
+                  lower.count <= 10,
+                  lower.allSatisfy({ $0.isLetter }) else { continue }
+            wordSet.insert(String(lower))
+        }
+
+        var words: [String] = []
+        var weights: [String: Int] = [:]
+        for lower in wordSet {
+            if lower.hasSuffix("ly") {
+                let stem = lower.dropLast(2)
+                if wordSet.contains(String(stem) + "ing") { continue }
+            }
             words.append(lower)
             // Shorter common words ranked higher.
             weights[lower] = max(0, 12 - lower.count)

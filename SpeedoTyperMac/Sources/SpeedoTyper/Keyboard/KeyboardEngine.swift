@@ -25,6 +25,16 @@ final class KeyboardEngine {
     private var currentSuggestion: String = ""
     private var debounceTimer: Timer?
 
+    // Injector.type posts a single keyDown event with the full unicode string.
+    // Our own tap sees it, so gate those events out or they'd clobber state
+    // (the injected space would commit+dismiss the ongoing progressive Tab).
+    private var pendingInjectedEvents: Int = 0
+
+    private var isAppDisabled: Bool {
+        guard let bid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return store.config.disabledApps.contains(bid)
+    }
+
     // Emoji shortcode state: triggered by `:`, characters appended, second `:` commits.
     private var emojiBuffer: String = ""
     private var inEmojiMode: Bool = false
@@ -58,6 +68,18 @@ final class KeyboardEngine {
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+        if isAppDisabled { return Unmanaged.passUnretained(event) }
+        if pendingInjectedEvents > 0 {
+            pendingInjectedEvents -= 1
+            return Unmanaged.passUnretained(event)
+        }
+        // Any ⌘/⌃/⌥ combo is an app shortcut, not text — pass through untouched.
+        // (Shift and Caps Lock stay handled so regular capitalized typing works.)
+        let flags = event.flags
+        if flags.contains(.maskCommand) || flags.contains(.maskControl) || flags.contains(.maskAlternate) {
+            dismiss()
+            return Unmanaged.passUnretained(event)
+        }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
 
         // Emoji acceptance (accept-full key with emoji preview visible)
@@ -65,12 +87,11 @@ final class KeyboardEngine {
             commitEmoji()
             return nil
         }
-        // Accept full suggestion
+        // Tab = accept one word at a time. Press Tab again for the next word.
         if keyCode == acceptFullCode, !currentSuggestion.isEmpty {
-            acceptFull()
+            acceptWord()
             return nil
         }
-        // Accept next word only
         if keyCode == acceptWordCode, !currentSuggestion.isEmpty {
             acceptWord()
             return nil
@@ -160,8 +181,8 @@ final class KeyboardEngine {
         let matches = EmojiData.match(prefix: emojiBuffer)
         guard let first = matches.first else { exitEmojiMode(); return }
         // Delete the `:buffer` the user typed, then type the glyph.
-        Injector.backspace(emojiBuffer.count + 1)
-        Injector.type(first.glyph)
+        injectBackspace(emojiBuffer.count + 1)
+        inject(first.glyph)
         exitEmojiMode()
     }
 
@@ -175,48 +196,84 @@ final class KeyboardEngine {
 
     private func schedulePredict() {
         debounceTimer?.invalidate()
-        debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: false) { [weak self] _ in
+        debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.runPredict() }
         }
     }
 
     private func runPredict() {
         guard !currentWord.isEmpty else { dismiss(); return }
-        let (suggestion, source) = predictor.predict(word: currentWord, context: contextWords)
-        _ = source
-        guard !suggestion.isEmpty else { dismiss(); return }
-        currentSuggestion = suggestion
-        overlay.show(typed: currentWord, suggestion: suggestion)
+        let snapshotWord = currentWord
+        let snapshotCtx = contextWords
+
+        // Sync n-gram — instant.
+        let (fast, _) = predictor.predictFast(word: snapshotWord, context: snapshotCtx)
+        NSLog("[SpeedoTyper] predict word='%@' ctx=%d ngram='%@'", snapshotWord, snapshotCtx.count, fast)
+        if !fast.isEmpty {
+            currentSuggestion = fast
+            overlay.show(suggestion: fast, typed: snapshotWord, allowMouseFallback: store.config.mouseFallback)
+        }
+
+        // Async LLM — never blocks the event tap.
+        predictor.requestLLM(word: snapshotWord, context: snapshotCtx) { [weak self] result in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                NSLog("[SpeedoTyper] llm '%@' → '%@'", snapshotWord, result ?? "(nil)")
+                guard let result, !result.isEmpty else { return }
+                guard self.currentWord == snapshotWord else { return }  // stale
+                self.currentSuggestion = result
+                self.overlay.show(suggestion: result, typed: self.currentWord, allowMouseFallback: self.store.config.mouseFallback)
+            }
+        }
     }
 
     // MARK: - Acceptance
 
-    private func acceptFull() {
-        let remaining = String(currentSuggestion.dropFirst(currentWord.count))
-        let trailing = store.config.includeTrailingSpace ? " " : ""
-        Injector.type(remaining + trailing)
-        contextWords.append(currentSuggestion)
-        trimContext()
-        currentWord = ""
-        dismiss()
-    }
-
+    /// Accept one word of the current suggestion. Pressing Tab again accepts
+    /// the next word; the remainder stays visible as ghost text between presses.
     private func acceptWord() {
-        let remaining = String(currentSuggestion.dropFirst(currentWord.count))
-        guard let firstSpace = remaining.firstIndex(where: { $0 == " " }) else {
-            Injector.type(remaining + " ")
-            contextWords.append(currentSuggestion)
+        let remaining: Substring = {
+            if currentWord.isEmpty { return Substring(currentSuggestion) }
+            if currentSuggestion.lowercased().hasPrefix(currentWord.lowercased()) {
+                return currentSuggestion.dropFirst(currentWord.count)
+            }
+            return Substring(currentSuggestion)
+        }()
+        let trimmed = remaining.drop(while: { $0.isWhitespace })
+        guard !trimmed.isEmpty else { dismiss(); return }
+
+        if let space = trimmed.firstIndex(where: { $0.isWhitespace }) {
+            let word = String(trimmed[..<space])
+            inject(word + " ")
+            contextWords.append(word)
+            trimContext()
+            let rest = trimmed[space...].drop(while: { $0.isWhitespace })
+            currentWord = ""
+            currentSuggestion = String(rest)
+            if currentSuggestion.isEmpty {
+                dismiss()
+            } else {
+                overlay.show(suggestion: currentSuggestion, typed: "", allowMouseFallback: store.config.mouseFallback)
+            }
+        } else {
+            let word = String(trimmed)
+            inject(word + " ")
+            contextWords.append(word)
             trimContext()
             currentWord = ""
+            currentSuggestion = ""
             dismiss()
-            return
         }
-        let wordPart = remaining[..<firstSpace]
-        Injector.type(String(wordPart) + " ")
-        contextWords.append(currentWord + wordPart)
-        trimContext()
-        currentWord = ""
-        dismiss()
+    }
+
+    private func inject(_ text: String) {
+        pendingInjectedEvents += 1  // one keyDown event per type() call
+        Injector.type(text)
+    }
+
+    private func injectBackspace(_ n: Int) {
+        pendingInjectedEvents += n
+        Injector.backspace(n)
     }
 
     private func commitWord() {
