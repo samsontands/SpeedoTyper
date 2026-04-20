@@ -15,14 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ngram = NGramPredictor(url: config.ngramURL)
         ngram.load()
 
-        var llm: (any Predictor)? = nil
+        var llm: LLMPredictor? = nil
         if config.config.enableLLM, let modelURL = config.resolveModel() {
-            llm = LLMPredictor(
+            let m = LLMPredictor(
                 modelPath: modelURL.path,
                 nCtx: Int32(config.config.nCtx),
-                nGpuLayers: Int32(config.config.nGpuLayers),
-                customInstructions: config.config.customInstructions
+                nGpuLayers: Int32(config.config.nGpuLayers)
             )
+            m.maxWords = config.config.maxCompletionWords
+            llm = m
             NSLog("[SpeedoTyper] loading GGUF from \(modelURL.path)")
         } else {
             NSLog("[SpeedoTyper] no GGUF found — running n-gram only. Set SPEEDOTYPER_MODEL or install Cotypist.")
@@ -52,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         engine?.stop()
         predictor?.ngram.save()
+        // llama.cpp's Metal backend crashes in its static destructor when the
+        // residency set is torn down after GPU state is already released. Skip
+        // global C++ destructors by going straight to _exit.
+        _exit(0)
     }
 
     private func installStatusItem() {

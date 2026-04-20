@@ -11,11 +11,19 @@ struct Config: Codable {
     var acceptFullKey: String = "tab"
     var acceptWordKey: String = "`"
     var includeTrailingSpace: Bool = true
+    /// Upper bound on completion length. 1 = single next word (Cotypist's
+    /// "Complete only the next word"), larger values allow full-sentence
+    /// continuations. 0 means unlimited (bounded only by token budget).
+    var maxCompletionWords: Int = 6
     var customInstructions: String =
         "Write in a friendly, professional and empathetic voice. " +
         "Keep sentences short, concise and readable."
     var enableEmojiSuggestions: Bool = true
     var appOverrides: [String: [String: Bool]] = [:]
+    /// Bundle IDs where SpeedoTyper should do nothing — no prediction, no overlay.
+    var disabledApps: [String] = []
+    /// When AX caret isn't available, fall back to mouse-location anchoring instead of hiding.
+    var mouseFallback: Bool = true
 }
 
 final class ConfigStore {

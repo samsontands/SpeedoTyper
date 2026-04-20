@@ -243,13 +243,65 @@ private struct ShortcutRow: View {
 
 private struct AppsPane: View {
     @Binding var config: Config
+    @State private var apps: [AppInfo] = []
+
+    struct AppInfo: Identifiable, Hashable {
+        var id: String { bundleID }
+        let bundleID: String
+        let name: String
+        let icon: NSImage?
+    }
+
     var body: some View {
         PaneStack(title: "App Settings") {
-            Text("Per-app overrides let you disable SpeedoTyper in specific apps.")
+            Toggle("Show ghost text at mouse when caret position is unavailable",
+                   isOn: $config.mouseFallback)
+            Divider()
+            Text("Disable SpeedoTyper in these apps:")
                 .foregroundStyle(.secondary)
-            Text("UI coming soon — edit config.json for now.")
-                .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
+            List {
+                ForEach(apps) { app in
+                    HStack {
+                        if let img = app.icon {
+                            Image(nsImage: img).resizable().frame(width: 20, height: 20)
+                        }
+                        Text(app.name)
+                        Spacer()
+                        Toggle("", isOn: binding(for: app.bundleID))
+                            .labelsHidden()
+                    }
+                }
+            }
+            .frame(minHeight: 260)
         }
+        .onAppear(perform: reloadApps)
+    }
+
+    private func reloadApps() {
+        var seen: [String: AppInfo] = [:]
+        for a in NSWorkspace.shared.runningApplications
+            where a.activationPolicy == .regular {
+            if let bid = a.bundleIdentifier, let name = a.localizedName {
+                seen[bid] = AppInfo(bundleID: bid, name: name, icon: a.icon)
+            }
+        }
+        for bid in config.disabledApps where seen[bid] == nil {
+            seen[bid] = AppInfo(bundleID: bid, name: bid, icon: nil)
+        }
+        apps = seen.values.sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    private func binding(for bundleID: String) -> Binding<Bool> {
+        Binding(
+            get: { !config.disabledApps.contains(bundleID) },
+            set: { enabled in
+                if enabled {
+                    config.disabledApps.removeAll { $0 == bundleID }
+                } else if !config.disabledApps.contains(bundleID) {
+                    config.disabledApps.append(bundleID)
+                }
+            }
+        )
     }
 }
 
